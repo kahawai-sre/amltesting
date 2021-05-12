@@ -19,11 +19,11 @@
 
 # >>>> UPDATE THESE:
 DEPLOYMENTID="v10002" #// Needs to be unique where unique resource names are required: storage account/keyvault/workspace etc 
-SUBSCRIPTION_ID="29c7e3d4-e589-4555-a1d8-ac60fcc05a2c" 
-TENANTID="e5216896-13b9-4e5f-8329-219f25e65d74" #// Tenant ID for AAD user object assigned to CI VM (RBAC)
-USER_OBJECTID="be51ef2c-a299-49bf-8550-f48edda5a58f" # // AAD ObjectID of AAD user object assigned to CI VM (RBAC)
+SUBSCRIPTION_ID="29c7exxx-xxxxxxxxxxxxxxxxxxxxxx" 
+TENANTID="e521xxx-xxxx-xxxx-xxxx-xxxxxxxxx" #// Tenant ID for AAD user object assigned to CI VM (RBAC)
+USER_OBJECTID="be5xxxx-xxxx-xxxx-xxxx-xxxxx" # // AAD ObjectID of AAD user object assigned to CI VM (RBAC)
 LOCATION="australiaeast"
-VM_ADMIN_USERNAME="jtadmin"
+VM_ADMIN_USERNAME="jumphostvmuser"
 # <<<<
 
 # --- Define Bastion/hub vnet core resource params - static for testing ---

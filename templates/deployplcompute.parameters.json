@@ -18,7 +18,7 @@
             "value": "training"
         },
         "admin_username": {
-            "value": "jtadmin"
+            "value": "vmuser"
         },
         "vm_size_sku": {
             "value": "Standard_D1_v2"
