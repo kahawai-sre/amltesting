@@ -1,0 +1,113 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspaceName": {
+            "value": "amlworkspacetest" // TODO: Fill in parameter value
+        },
+        "location": {
+            "value": "australiaeast" // TODO: Fill in parameter value
+        },
+        "sku": {
+            "value": "enterprise"
+        },
+        "tagValues": {
+            "value": {}
+        },
+        "storageAccountOption": {
+            "value": "new"
+        },
+        "storageAccountName": {
+            "value": "saamslsecuritytest001" // TODO: Fill in parameter value
+        },
+        "storageAccountType": {
+            "value": "Standard_LRS"
+        },
+        "storageAccountBehindVNet": {
+            "value": "true"
+        },
+        "storageAccountResourceGroupName": {
+            "value": "ws1103" // TODO: Fill in parameter value
+        },
+        "keyVaultOption": {
+            "value": "existing"
+        },
+        "keyVaultName": {
+            "value": "ws1103kvasbtest2" // TODO: Fill in parameter value
+        },
+        "keyVaultBehindVNet": {
+            "value": "true"
+        },
+        "keyVaultResourceGroupName": {
+            "value": "ws1103" // TODO: Fill in parameter value
+        },
+        "applicationInsightsOption": {
+            "value": "new"
+        },
+        "applicationInsightsName": {
+            "value": "ws1103ai" // TODO: Fill in parameter value
+        },
+        "applicationInsightsResourceGroupName": {
+            "value": "ws1103" // TODO: Fill in parameter value
+        },
+        "containerRegistryOption": {
+            "value": "new"
+        },
+        "containerRegistryName": {
+            "value": "ws1103acrasbtest" // TODO: Fill in parameter value
+        },
+        "containerRegistrySku": {
+            "value": "Premium"
+        },
+        "containerRegistryResourceGroupName": {
+            "value": "ws1103" // TODO: Fill in parameter value
+        },
+        "containerRegistryBehindVNet": {
+            "value": "true"
+        },
+        "vnetOption": {
+            "value": "existing" // TODO: Fill in parameter value
+        },
+        "vnetName": {
+            "value": "hub" // TODO: Fill in parameter value
+        },
+        "vnetResourceGroupName": {
+            "value": "ws1103" // TODO: Fill in parameter value
+        },
+        "vnetLocation": {
+            "value": "australiaeast" // TODO: Fill in parameter value
+        },
+        "addressPrefixes": {
+            "value": [
+              "10.150.0.0/16"
+            ]
+        },
+        "subnetOption": {
+            "value": "existing" // TODO: Fill in parameter value
+        },
+        "subnetName": {
+            "value": "training" // TODO: Fill in parameter value
+        },
+        "subnetPrefix": {
+            "value": "10.150.0.0/24"
+        },
+        "adbWorkspace": {
+            "value": ""
+        },
+        "confidential_data": {
+            "value": "true"
+        },
+        "encryption_status": {
+            "value": "Disabled"
+        },
+        "cmk_keyvault": {
+            "value": "//subscriptions/0873a521-xxxxxxxxxxx/resourceGroups/ws1103/providers/Microsoft.KeyVault/vaults/ws1103kvasbtest2"
+        },
+        "resource_cmk_uri": {
+            "value": "https://ws1103kvxxxxxx.vault.azure.net/keys/wsxxxxx/17cfxxxxxxx"
+        },
+        "privateEndpointType": {
+            "value": "AutoApproval"
+        }
+    }
+}

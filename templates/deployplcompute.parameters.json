@@ -1,0 +1,33 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "value": "australiaeast"
+        },
+        "workspace_name": {
+            "value": "amlworkspacetest"
+        },
+        "cluster_name": {
+            "value": "gpu-cluster"
+        },
+        "vnet_name": {
+            "value": "hub"
+        },
+        "subnet_name": {
+            "value": "training"
+        },
+        "admin_username": {
+            "value": "jtadmin"
+        },
+        "vm_size_sku": {
+            "value": "Standard_D1_v2"
+        },
+        "min_node_count": {
+            "value": 1
+        },
+        "max_node_count": {
+            "value": 1
+        }
+    }
+}

@@ -1,0 +1,241 @@
+
+# ===============================================================
+#                      BASIC INSTRUCTIONS
+# ===============================================================
+# 1. This is a very basic test config for private AML/CI/CC
+# 2. Deploys 
+#  - Two vNets, and vNet peering
+#    - One "central/Bastion" as a mock hub
+#    - AML/CI/CC vNet
+#  - Bastion host and NAT gateway (for static egress IP) in central vNet
+#  - Storage account, keyvault and ACR instances as AML dependencies, all on private link in AML vNet
+#  - AML workspace and CI, CC instance all on private link in AML workspace
+#  - Jump host VM in central vNet that can be used to access private workspace via aml.azure.com, cli etc, and which can run VS code etc against workspace and compute resources
+# 3. A couple of the commands will prompt for a password, so run the commands below in batches interactively (can do Terraform/ARM later if it helps)
+# 4. Tested under Ubuntu/Linux/WSL2, not windows
+# ===============================================================
+
+# --- Define params ---
+
+# >>>> UPDATE THESE:
+DEPLOYMENTID="v10002" #// Needs to be unique where unique resource names are required: storage account/keyvault/workspace etc 
+SUBSCRIPTION_ID="29c7e3d4-e589-4555-a1d8-ac60fcc05a2c" 
+TENANTID="e5216896-13b9-4e5f-8329-219f25e65d74" #// Tenant ID for AAD user object assigned to CI VM (RBAC)
+USER_OBJECTID="be51ef2c-a299-49bf-8550-f48edda5a58f" # // AAD ObjectID of AAD user object assigned to CI VM (RBAC)
+LOCATION="australiaeast"
+VM_ADMIN_USERNAME="jtadmin"
+# <<<<
+
+# --- Define Bastion/hub vnet core resource params - static for testing ---
+
+RG_CENTRAL="rg-central-$DEPLOYMENTID"
+VNET_BASTION="vnet-bastion"
+VNET_BASTION_SPACE="10.1.0.0/16"
+SUBNET_BASTION_RANGE="10.1.0.0/24"
+SUBNET_JUMPHOST="jumphost"
+SUBNET_JUMPHOST_RANGE="10.1.1.0/24"
+NSG_BASTION="nsg-bastion"
+NSG_JUMPHOST="nsg-jumphost"
+SA_CENTRAL_NAME="sacentral$DEPLOYMENTID"
+BASTION="bastion-aml-test"
+PIP_BASTION="pip-bastion-aml-test"
+
+# --- Define AML core resource params - static for testing ---
+
+RG_AML="rg-aml-$DEPLOYMENTID"
+VNET_AML="vnet-aml"
+VNET_AML_SPACE="10.2.0.0/16"
+SUBNET_AML_TRAINING="training"
+SUBNET_AML_TRAINING_RANGE="10.2.0.0/24"
+SUBNET_AML_SCORING="scoring"
+SUBNET_AML_SCORING_RANGE="10.2.1.0/24"
+NSG_AML_CI="nsg-aml-compute"
+KEYVAULT_NAME="kvaml$DEPLOYMENTID"
+KEYVAULT_KEY_NAME="amlkey"
+ACR_NAME="acraml$DEPLOYMENTID"
+SA_NAME="saaml$DEPLOYMENTID"
+LA_WORKSPACE_NAME="la-aml-$DEPLOYMENTID"
+
+# --- Define AML workspace params - for ARM template ---
+
+WORKSPACENAME="amlws$DEPLOYMENTID"
+STORAGEACCOUNTNAME="saaml$DEPLOYMENTID"
+ACRNAME="acraml$DEPLOYMENTID"
+
+# --- Define CI params - for ARM template ---
+
+COMPUTENAME="ci-$DEPLOYMENTID"
+VMSIZE="Standard_DS3_v2"
+
+# --- Define CC params - for ARM template ---
+
+CLUSTER_NAME="cc-$DEPLOYMENTID"
+VM_SIZE_SKU="Standard_D1_v2"
+MIN_NODE_COUNT="1"
+MAX_NODE_COUNT="1"
+ADMIN_USERNAME="$VM_ADMIN_USERNAME"
+
+# --- Pre-define Resource IDs - should not modify ---
+
+BASTION_VNET_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_CENTRAL/providers/Microsoft.Network/virtualNetworks/$VNET_BASTION"
+AML_VNET_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.Network/virtualNetworks/$VNET_AML"
+TRAINING_SUBNET_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.Network/virtualNetworks/$VNET_AML/subnets/$SUBNET_AML_TRAINING"
+SCORING_SUBNET_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.Network/virtualNetworks/$VNET_AML/subnets/$SUBNET_AML_SCORING"
+AZFW_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_CENTRAL/providers/Microsoft.Network/AZUREFIREWALLS/$AZFW_NAME"
+KEYVAULT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.KeyVault/vaults/$KEYVAULT_NAME"
+ACR_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.ContainerRegistry/registries/$ACR_NAME"
+SA_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.Storage/storageAccounts/$SA_NAME"
+KEYVAULT_PRIVATE_EP_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.Network/privateEndpoints/$KEYVAULT_NAME"
+ACR_PRIVATE_EP_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.Network/privateEndpoints/$ACR_NAME"
+SA_BLOB_PRIVATE_EP_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.Network/privateEndpoints/$SA_NAME-blob"
+SA_FILE_PRIVATE_EP_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_AML/providers/Microsoft.Network/privateEndpoints/$SA_NAME-file"
+LA_WORKSPACE_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG_CENTRAL/providers/microsoft.operationalinsights/workspaces/$LA_WORKSPACE_NAME"
+
+# --- Set scope for deployment ---
+
+az account set --subscription $SUBSCRIPTION_ID
+
+# --- Setup central vNet, Bastion, and Jumphost VM
+
+az group create -n $RG_CENTRAL -l $LOCATION
+az network vnet create -g $RG_CENTRAL -n $VNET_BASTION --address-prefix $VNET_BASTION_SPACE
+az network vnet subnet create -g $RG_CENTRAL --vnet-name $VNET_BASTION -n AzureBastionSubnet --address-prefix $SUBNET_BASTION_RANGE
+az network vnet subnet create -g $RG_CENTRAL --vnet-name $VNET_BASTION -n $SUBNET_JUMPHOST --address-prefix $SUBNET_JUMPHOST_RANGE
+az network nsg create -n $NSG_BASTION -g $RG_CENTRAL
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name DENY_ALL_OUT --priority 4096 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes "*" --destination-port-ranges '*' --access Deny --protocol '*' --description "Deny all outbound"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name DENY_ALL_IN --priority 4096 --direction Inbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes "*" --destination-port-ranges '*' --access Deny --protocol '*' --description "Deny all outbound"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name AllowHttpsInbound --priority 100 --direction Inbound --source-address-prefixes "Internet" --source-port-ranges '*' --destination-address-prefixes "*" --destination-port-ranges '443' --access Allow --protocol 'TCP' --description "Allow inbound HTTPS session to Bastion"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name AllowGatewayManagerInbound --priority 200 --direction Inbound --source-address-prefixes GatewayManager --source-port-ranges '*' --destination-address-prefixes "*" --destination-port-ranges '443' --access Allow --protocol 'TCP' --description "Allow inbound for Bastion Management"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name AllowAzureLoadBalancerInbound --priority 300 --direction Inbound --source-address-prefixes AzureLoadBalancer --source-port-ranges '*' --destination-address-prefixes "*" --destination-port-ranges '443' --access Allow --protocol 'TCP' --description "Allow inbound for Bastion Management"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name AllowBastionHostControlCommsInbound --priority 400 --direction Inbound --source-address-prefixes VirtualNetwork --source-port-ranges '*' --destination-address-prefixes VirtualNetwork --destination-port-ranges 8080 5701  --access Allow --protocol '*' --description "Allow inbound for Bastion Control Plane"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name AllowSshRdpOutbound --priority 100 --direction Outbound --source-address-prefixes '*' --source-port-ranges '*' --destination-address-prefixes VirtualNetwork --destination-port-ranges 22 3389  --access Allow --protocol '*' --description "Allow RDP SSH outbound"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name AllowAzureCloudOutbound --priority 200 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes AzureCloud --destination-port-ranges '443' --access Allow --protocol 'TCP' --description "Allow Azure Cloud Outboundt"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name AllowGetSessionInfo --priority 300 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes Internet --destination-port-ranges '80' --access Allow --protocol '*' --description "Allow Session Control outbound"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_BASTION --name AllowBastionHostControlCommsOutbound --priority 400 --direction Outbound --source-address-prefixes VirtualNetwork --source-port-ranges '*' --destination-address-prefixes VirtualNetwork --destination-port-ranges 8080 5701  --access Allow --protocol '*' --description "Allow outbound for Bastion Control Plane"
+az network nsg create -n $NSG_JUMPHOST -g $RG_CENTRAL
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_JUMPHOST --name DENY_INTERNET_OUT --priority 4096 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes Internet --destination-port-ranges '*' --access Deny --protocol '*' --description "Deny outbound to Internet"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_JUMPHOST --name AAD --priority 100 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes AzureActiveDirectory --destination-port-ranges '*' --access Allow --protocol '*' --description "Allow outbound to AAD endpoints"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_JUMPHOST --name ARM --priority 200 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes AzureResourceManager --destination-port-ranges '*' --access Allow --protocol '*' --description "Allow outbound to Azure Management"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_JUMPHOST --name AML --priority 300 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes AzureMachineLearning --destination-port-ranges '*' --access Allow --protocol '*' --description "Allow outbound to Azure AML control-management"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_JUMPHOST --name ACR --priority 400 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes AzureContainerRegistry.AustraliaEast --destination-port-ranges '*' --access Allow --protocol '*' --description "Allow outbound to ACR"
+az network nsg rule create --resource-group $RG_CENTRAL --nsg-name $NSG_JUMPHOST --name Storage --priority 500 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes Storage.AustraliaEast --destination-port-ranges '*' --access Allow --protocol '*' --description "Allow outbound to blob and file Storage"
+az network vnet subnet update -g $RG_CENTRAL --vnet-name $VNET_BASTION -n AzureBastionSubnet --network-security-group $NSG_BASTION
+az network vnet subnet update -g $RG_CENTRAL --vnet-name $VNET_BASTION -n $SUBNET_JUMPHOST --network-security-group $NSG_JUMPHOST
+az monitor log-analytics workspace create --resource-group $RG_CENTRAL --workspace-name $LA_WORKSPACE_NAME --location $LOCATION
+az storage account create --name $SA_CENTRAL_NAME --resource-group $RG_CENTRAL --allow-blob-public-access false --default-action Deny --bypass Logging Metrics AzureServices
+az network watcher flow-log create -l $LOCATION -n "$NSG_BASTION-$LOCATION" -g $RG_CENTRAL --nsg $NSG_BASTION --storage-account $SA_CENTRAL_NAME --log-version 2 --retention 7 --workspace $LA_WORKSPACE_ID --interval 10 --traffic-analytics true
+az network watcher flow-log create -l $LOCATION -n "$NSG_JUMPHOST-$LOCATION" -g $RG_CENTRAL --nsg $NSG_JUMPHOST --storage-account $SA_CENTRAL_NAME --log-version 2 --retention 7 --workspace $LA_WORKSPACE_ID --interval 10 --traffic-analytics true
+az network public-ip create --name $PIP_BASTION --resource-group $RG_CENTRAL --sku Standard --allocation-method Static
+az network bastion create --name $BASTION --public-ip-address $PIP_BASTION --resource-group $RG_CENTRAL --vnet-name $VNET_BASTION
+az vm image terms accept --urn microsoft-ads:windows-data-science-vm:windows2016:20.01.10
+#az vm create -n JUMPHOST -g $RG_CENTRAL --image microsoft-ads:windows-data-science-vm:windows2016:20.01.10 --size Standard_DS1_v2 --admin-username $VM_ADMIN_USERNAME -l $LOCATION --vnet-name $VNET_BASTION --subnet $SUBNET_JUMPHOST --public-ip-address "" --storage-sku StandardSSD_LRS
+az vm create -n JUMPHOST -g $RG_CENTRAL --image win2019datacenter --size Standard_DS1_v2 --admin-username $VM_ADMIN_USERNAME -l $LOCATION --vnet-name $VNET_BASTION --subnet $SUBNET_JUMPHOST --public-ip-address "" --storage-sku StandardSSD_LRS #// Interactive command
+
+# --- Deploy NAT Gateway in Jumphost vNET ---
+# NOTE:
+# 1. NAT Gateway is an alternative to firewall for controlling egress IP. Assumes NO Azure Firewall or custom route table / AzFw route ****
+# 2. Expected that NAT Gateway will only be required in *Jumphost* network, not CI network at this stage subject to more testing (CI will not be able to use it and only supports routing via firewall for egress (UDP/forced tunneling), not default vNet routing NSG etc ...) ****
+az network public-ip create --name pip-nat-gateway-aml-test --resource-group $RG_CENTRAL --sku Standard --allocation-method Static
+az network nat gateway create --resource-group $RG_CENTRAL --name nat-gateway-aml-test --public-ip-addresses pip-nat-gateway-aml-test --idle-timeout 10 
+
+# --- Create AML vNet, subnet, nsg config, vnet peering ---
+
+az group create -n $RG_AML -l $LOCATION
+az network vnet create -g $RG_AML -n $VNET_AML --address-prefix $VNET_AML_SPACE
+az network vnet subnet create -g $RG_AML --vnet-name $VNET_AML -n $SUBNET_AML_TRAINING --address-prefixes $SUBNET_AML_TRAINING_RANGE
+az network vnet subnet update -g $RG_AML --vnet-name $VNET_AML -n $SUBNET_AML_TRAINING --service-endpoints Microsoft.Storage Microsoft.KeyVault Microsoft.ContainerRegistry
+az network vnet subnet create -g $RG_AML --vnet-name $VNET_AML -n $SUBNET_AML_SCORING --address-prefixes $SUBNET_AML_SCORING_RANGE
+az network vnet subnet update -g $RG_AML --vnet-name $VNET_AML -n $SUBNET_AML_SCORING --service-endpoints Microsoft.Storage Microsoft.KeyVault Microsoft.ContainerRegistry
+az network nsg create -n $NSG_AML_CI -g $RG_AML
+az network nsg rule create --resource-group $RG_AML --nsg-name $NSG_AML_CI --name DENY_INTERNET_OUT --priority 4096 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes Internet --destination-port-ranges '*' --access Deny --protocol '*' --description "Deny outbound to Internet"
+az network nsg rule create --resource-group $RG_AML --nsg-name $NSG_AML_CI --name AAD --priority 100 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes AzureActiveDirectory --destination-port-ranges '*' --access Allow --protocol '*' --description "Allow outbound to AAD endpoints"
+az network nsg rule create --resource-group $RG_AML --nsg-name $NSG_AML_CI --name ARM --priority 200 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes AzureResourceManager --destination-port-ranges '*' --access Allow --protocol '*' --description "Allow outbound to Azure Management"
+az network nsg rule create --resource-group $RG_AML --nsg-name $NSG_AML_CI --name AML --priority 300 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes AzureMachineLearning --destination-port-ranges '*' --access Allow --protocol '*' --description "Allow outbound to Azure AML control-management"
+az network nsg rule create --resource-group $RG_AML --nsg-name $NSG_AML_CI --name ACR --priority 400 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes AzureContainerRegistry.AustraliaEast --destination-port-ranges '*' --access Allow --protocol '*' --description "Allow outbound to ACR"
+az network nsg rule create --resource-group $RG_AML --nsg-name $NSG_AML_CI --name Storage --priority 500 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes Storage.AustraliaEast --destination-port-ranges '*' --access Allow --protocol 'TCP' --description "Allow outbound to blob and file Storage"
+az network nsg rule create --resource-group $RG_AML --nsg-name $NSG_AML_CI --name NTP --priority 600 --direction Outbound --source-address-prefixes "*" --source-port-ranges '*' --destination-address-prefixes "*" --destination-port-ranges '123' --access Allow --protocol 'UDP' --description "Allow outbound NTP"
+az network vnet subnet update -g $RG_AML --vnet-name $VNET_AML -n $SUBNET_AML_TRAINING --network-security-group $NSG_AML_CI
+az network vnet subnet update -g $RG_AML --vnet-name $VNET_AML -n $SUBNET_AML_SCORING --network-security-group $NSG_AML_CI
+NSG_AML_CI_ID=$(az network nsg list --resource-group $RG_AML --query "[?name=='$NSG_AML_CI'].id" -o tsv)
+az network watcher flow-log create -l $LOCATION -n "$NSG_AML_CI-$LOCATION" -g $RG_CENTRAL --nsg $NSG_AML_CI_ID --storage-account $SA_CENTRAL_NAME --log-version 2 --retention 7 --workspace $LA_WORKSPACE_ID --interval 10 --traffic-analytics true
+az network vnet peering create --name "$VNET_BASTION-to-$VNET_AML" --resource-group $RG_CENTRAL --vnet-name $VNET_BASTION --remote-vnet $AML_VNET_ID --allow-forwarded-traffic --allow-vnet-access --subscription $SUBSCRIPTION_ID --allow-gateway-transit #--use-remote-gateways
+az network vnet peering create --name "$VNET_AML-to-$VNET_BASTION" --resource-group $RG_AML --vnet-name $VNET_AML --remote-vnet $BASTION_VNET_ID --allow-forwarded-traffic --allow-vnet-access --subscription $SUBSCRIPTION_ID #--use-remote-gateways #--allow-gateway-transit 
+
+# --- Deploy AML workspace deploy prereqs ---
+
+az keyvault create -l $LOCATION -n $KEYVAULT_NAME -g $RG_AML
+KV_ID=$(az keyvault list --resource-group $RG_AML --query "[?name=='$KEYVAULT_NAME'].id" -o tsv)
+az keyvault key create -n $KEYVAULT_KEY_NAME --vault-name $KEYVAULT_NAME
+KV_KEY_ID=$(az keyvault key list --vault-name $KEYVAULT_NAME --query "[?name=='$KEYVAULT_KEY_NAME'].kid" -o tsv)
+KV_KEY_ID_VERSION=$(az keyvault key list-versions --id $KV_KEY_ID --query "[?name=='$KEYVAULT_KEY_NAME'].kid" -o tsv)
+
+# --- Deploy private AML workspace ---
+
+az deployment group create -n private-aml-workspace -g $RG_AML -f ./templates/azuredeploy.json -p ./templates/azuredeploy.parameters.json --parameters workspaceName=$WORKSPACENAME location=$LOCATION storageAccountName=$STORAGEACCOUNTNAME storageAccountResourceGroupName=$RG_AML keyVaultName=$KEYVAULT_NAME keyVaultResourceGroupName=$RG_AML applicationInsightsName=appis$WORKSPACENAME applicationInsightsResourceGroupName=$RG_AML containerRegistryName=$ACRNAME containerRegistryResourceGroupName=$RG_AML vnetLocation=$LOCATION vnetResourceGroupName=$RG_AML vnetName=$VNET_AML subnetName=$SUBNET_AML_TRAINING subnetPrefix=$SUBNET_AML_TRAINING_RANGE cmk_keyvault=$KV_ID resource_cmk_uri=$KV_KEY_ID_VERSION
+
+# --- Enable private link on SA,KV,ACR accounts ---
+
+az network private-dns zone create --resource-group $RG_AML --name privatelink.vaultcore.azure.net
+az network private-dns zone create --resource-group $RG_AML --name "privatelink.azurecr.io"
+az network private-dns zone create --resource-group $RG_AML --name "privatelink.blob.core.windows.net"
+az network private-dns zone create --resource-group $RG_AML --name "privatelink.file.core.windows.net"
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $VNET_AML --zone-name privatelink.vaultcore.azure.net --name plinkdnslinkkv --registration-enabled false
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $VNET_AML --zone-name privatelink.azurecr.io --name plinkdnslinkacr --registration-enabled false
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $VNET_AML --zone-name privatelink.blob.core.windows.net --name plinkdnslinkblob --registration-enabled false
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $VNET_AML --zone-name privatelink.file.core.windows.net --name plinkdnslinkfile --registration-enabled false
+az network private-endpoint create --name $KEYVAULT_NAME --resource-group $RG_AML --vnet-name $VNET_AML --subnet $SUBNET_AML_TRAINING --private-connection-resource-id $KEYVAULT_ID --group-id vault --connection-name conn-kv
+az network private-endpoint create --name $ACR_NAME --resource-group $RG_AML --vnet-name $VNET_AML --subnet $SUBNET_AML_TRAINING --private-connection-resource-id $ACR_ID --group-id registry --connection-name conn-acr
+az network private-endpoint create --name $SA_NAME-blob --resource-group $RG_AML --vnet-name $VNET_AML --subnet $SUBNET_AML_TRAINING --private-connection-resource-id $SA_ID --group-id blob --connection-name conn-blob
+az network private-endpoint create --name $SA_NAME-file --resource-group $RG_AML --vnet-name $VNET_AML --subnet $SUBNET_AML_TRAINING --private-connection-resource-id $SA_ID --group-id file --connection-name conn-file
+
+# --- Create A-records in private zones ---
+
+privateEndpointNIC=$(az network private-endpoint show --ids $KEYVAULT_PRIVATE_EP_ID --query "networkInterfaces[0].id" -o tsv)
+privateEndpointIP=$(az network nic show --ids $privateEndpointNIC --query "ipConfigurations[0].privateIpAddress" -o tsv)
+az network private-dns record-set a create --resource-group $RG_AML --zone-name privatelink.vaultcore.azure.net --name $KEYVAULT_NAME
+az network private-dns record-set a add-record --resource-group $RG_AML --zone-name privatelink.vaultcore.azure.net --record-set-name $KEYVAULT_NAME --ipv4-address $privateEndpointIP
+
+privateEndpointNIC=$(az network private-endpoint show --ids $ACR_PRIVATE_EP_ID --query "networkInterfaces[0].id" -o tsv)
+privateEndpointIP=$(az network nic show --ids $privateEndpointNIC --query "ipConfigurations[0].privateIpAddress" -o tsv)
+az network private-dns record-set a create --resource-group $RG_AML --zone-name privatelink.azurecr.io --name $ACR_NAME
+az network private-dns record-set a add-record --resource-group $RG_AML --zone-name privatelink.azurecr.io --record-set-name $ACR_NAME --ipv4-address $privateEndpointIP
+
+privateEndpointNIC=$(az network private-endpoint show --ids $SA_BLOB_PRIVATE_EP_ID --query "networkInterfaces[0].id" -o tsv)
+privateEndpointIP=$(az network nic show --ids $privateEndpointNIC --query "ipConfigurations[0].privateIpAddress" -o tsv)
+az network private-dns record-set a create --resource-group $RG_AML --zone-name privatelink.blob.core.windows.net --name $SA_NAME
+az network private-dns record-set a add-record --resource-group $RG_AML --zone-name privatelink.blob.core.windows.net --record-set-name $SA_NAME --ipv4-address $privateEndpointIP
+
+privateEndpointNIC=$(az network private-endpoint show --ids $SA_FILE_PRIVATE_EP_ID --query "networkInterfaces[0].id" -o tsv)
+privateEndpointIP=$(az network nic show --ids $privateEndpointNIC --query "ipConfigurations[0].privateIpAddress" -o tsv)
+az network private-dns record-set a create --resource-group $RG_AML --zone-name privatelink.file.core.windows.net --name $SA_NAME
+az network private-dns record-set a add-record --resource-group $RG_AML --zone-name privatelink.file.core.windows.net --record-set-name $SA_NAME --ipv4-address $privateEndpointIP
+
+# --- Link Private DNS zones holding A-records to central/bastion/jump host VM vnet (allow Jump Host to resolve) ---
+
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $BASTION_VNET_ID --zone-name privatelink.vaultcore.azure.net --name plinkdnslinkkv-bastion --registration-enabled false
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $BASTION_VNET_ID --zone-name privatelink.azurecr.io --name plinkdnslinkacr-bastion --registration-enabled false
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $BASTION_VNET_ID --zone-name privatelink.blob.core.windows.net --name plinkdnslinkblob-bastion --registration-enabled false
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $BASTION_VNET_ID --zone-name privatelink.file.core.windows.net --name plinkdnslinkfile-bastion --registration-enabled false
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $BASTION_VNET_ID --zone-name privatelink.api.azureml.ms --name plinkdnslinkamlapi-bastion --registration-enabled false
+az network private-dns link vnet create --resource-group $RG_AML --virtual-network $BASTION_VNET_ID --zone-name privatelink.notebooks.azure.net --name plinkdnslinkamlnote-bastion --registration-enabled false
+
+# --- MANUAL: Connect to Jump Host via Azure Bastion, browse to ml.azure.com (which should resolve workspaces on private IP via private DNS), and test workspace and storage connectivity ---
+
+# --- MANUAL: Follow steps here to check AML workspace function, Managed Identity and private access to storage account 
+#     https://github.com/jhirono/amlsecurity#5-enable-ml-studio-ux-features
+
+# --- Deploy CI Instance and CI cluster on Private IP ---
+
+az network vnet subnet update -g $RG_AML --vnet-name $VNET_AML -n $SUBNET_AML_TRAINING --disable-private-endpoint-network-policies true
+az network vnet subnet update -g $RG_AML --vnet-name $VNET_AML -n $SUBNET_AML_TRAINING --disable-private-link-service-network-policies true
+az deployment group create -n $COMPUTENAME -g $RG_AML -f ./templates/createCIwithprivateIPPOBO.json -p ./templates/createCIwithprivateIPPOBOparms.json -p workspaceName=$WORKSPACENAME computeName=$COMPUTENAME vmSize=$VMSIZE vnetResourceGroupName=$RG_AML vnetName=$VNET_AML subnetName=$SUBNET_AML_TRAINING tenantId=$TENANTID objectId=$USER_OBJECTID
+az deployment group create -n $CLUSTER_NAME -g $RG_AML -f ./templates/deployplcompute.json -p ./templates/deployplcompute.parameters.json -p location=$LOCATION workspace_name=$WORKSPACENAME cluster_name=$CLUSTER_NAME vnet_name=$VNET_AML subnet_name=$SUBNET_AML_TRAINING admin_username=$ADMIN_USERNAME vm_size_sku=$VM_SIZE_SKU min_node_count=$MIN_NODE_COUNT max_node_count=$MAX_NODE_COUNT  #// Interactive command
+
+# --- Test management of AML workspace - run on JUMPHOST which has access to AML private endpoint / and where AML has access via Private Link Service and associated Load Balancer (managed by AML) ---
+
+az config set extension.use_dynamic_install=yes_without_prompt
+az extension add -n azure-cli-ml
+az ml folder attach -w $WORKSPACENAME -g $RG_AML
+az ml computetarget update amlcompute --name $CLUSTER_NAME --min-nodes 0 --max-nodes 1
+az ml computetarget computeinstance stop --name $COMPUTENAME
+

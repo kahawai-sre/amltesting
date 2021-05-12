@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspaceName": {
+      "value": "amlworkspacetest"
+    },
+    "computeName": {
+      "value": "testcipip"
+    },
+    "location": {
+        "value": "australiaeast"
+      },
+      "vmSize": {
+        "value": "Standard_DS3_v2"
+      },
+      "vnetResourceGroupName": {
+        "value": "ws1103"
+      },
+      "vnetName": {
+        "value": "hub"
+      },
+      "subnetName": {
+        "value": "training"
+      },
+      "tenantId": {
+        "value": "e5216896-xxxxxx"
+      },
+      "objectId": {
+        "value": "be51ef2c-xxxxxx"
+      }
+  }
+}
